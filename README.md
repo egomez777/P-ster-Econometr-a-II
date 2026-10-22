@@ -1,2 +1,2 @@
-# P-ster-Econometr-a-II
+# Poster_Econometria_II
 Póster Econometría II :]
