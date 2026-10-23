@@ -1,338 +1,169 @@
 # %% PRIMERA PARTE. Preparación y revisión de la base mensual
 
-# 1. Importar las librerías
-import pandas as pd
 from pathlib import Path
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-# 2. Localizar y cargar la base
-ruta = Path(__file__).parent / "gold_inflation_adjusted.csv"
+from scipy.stats import jarque_bera, probplot
+from statsmodels.tsa.stattools import adfuller, acf
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
+
+# 1. Localizar y cargar la base usando una ruta relativa
+ruta = Path(__file__).resolve().parent / "gold_inflation_adjusted.csv"
+
+if not ruta.exists():
+    raise FileNotFoundError(
+        "No se encontró 'gold_inflation_adjusted.csv'. "
+        "Guarda el CSV en la misma carpeta que este script."
+    )
 
 datos = pd.read_csv(ruta)
 
-# 3. Convertir las fechas y organizar las columnas
+# 2. Convertir las fechas y organizar las columnas
 datos["Date"] = pd.to_datetime(datos["Date"], format="%m/%d/%Y")
-
 datos = datos.rename(columns={"Date": "date", "Value": "real_gold_price"})
-
 datos = datos.sort_values("date")
 
-# 4. Seleccionar los últimos 50 años completos
+# 3. Seleccionar el período de octubre de 1976 a septiembre de 2026
 datos = datos.loc[
     (datos["date"] >= "1976-10-01") & (datos["date"] <= "2026-09-01")
 ].copy()
 
-# 5. Revisar las observaciones
-print("Primeras observaciones:")
+# 4. Revisar las observaciones mensuales
+print("PRIMERAS OBSERVACIONES MENSUALES")
 print(datos.head())
-
-print("\nÚltimas observaciones:")
+print("\nÚLTIMAS OBSERVACIONES MENSUALES")
 print(datos.tail())
-
-# 6. Verificar el número de observaciones
-print("\nNúmero de observaciones:", len(datos))
-
-# 7. Comprobar valores faltantes
-print("\nValores faltantes:")
+print("\nNúmero de observaciones mensuales:", len(datos))
+print("\nValores faltantes por columna:")
 print(datos.isna().sum())
 
-# 8. Comprobar si falta algún mes
+# 5. Comprobar si falta algún mes
 calendario = pd.date_range(
-    start=datos["date"].min(), end=datos["date"].max(), freq="MS"
+    start=datos["date"].min(),
+    end=datos["date"].max(),
+    freq="MS"
 )
-
 fechas_faltantes = calendario.difference(datos["date"])
-
 print("\nMeses esperados:", len(calendario))
 print("Meses faltantes:", len(fechas_faltantes))
-print("Fechas faltantes:", fechas_faltantes)
+if len(fechas_faltantes) > 0:
+    print(fechas_faltantes)
 
-# %% SEGUNDA PARTE. Construcción y gráfica de la serie trimestral
+# %% SEGUNDA PARTE. Construcción y exploración de la serie trimestral original
 
-import matplotlib.pyplot as plt
-
-# 1. Calcular el promedio de cada trimestre
+# 1. Calcular el promedio de cada trimestre a partir de los datos mensuales
 datos_trimestrales = (
     datos.set_index("date")["real_gold_price"]
     .resample("QE")
     .mean()
     .rename("real_gold_price")
-    .reset_index()
+    .to_frame()
 )
 
-# 2. Revisar los resultados
-print("Primeros trimestres:")
+# 2. Crear la serie trimestral con índice de fechas
+serie_oro = datos_trimestrales["real_gold_price"].asfreq("QE")
+
+print("\nPRIMEROS TRIMESTRES")
 print(datos_trimestrales.head())
-
-print("\nÚltimos trimestres:")
+print("\nÚLTIMOS TRIMESTRES")
 print(datos_trimestrales.tail())
+print("\nNúmero de observaciones trimestrales:", len(serie_oro))
+print("Valores faltantes en la serie trimestral:", serie_oro.isna().sum())
 
-print("\nNúmero de observaciones:", len(datos_trimestrales))
-
-print("\nValores faltantes:")
-print(datos_trimestrales.isna().sum())
-
-# 3. Graficar la serie trimestral
+# 3. Graficar la serie original en niveles
 plt.figure(figsize=(12, 5))
-
-plt.plot(datos_trimestrales["date"], datos_trimestrales["real_gold_price"], linewidth=1)
-
-plt.title("Precio real trimestral del oro (1976-2026)")
+plt.plot(serie_oro.index, serie_oro, linewidth=1)
+plt.title("Precio real trimestral del oro en niveles (1976-2026)")
 plt.xlabel("Fecha")
-plt.ylabel("Precio en dólares ajustados por inflación")
+plt.ylabel("Precio real del oro")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-# %% TERCERA PARTE. Identificación: prueba ADF trimestral
+# %% TERCERA PARTE. Identificación inicial de la no estacionariedad
 
-from statsmodels.tsa.stattools import adfuller
+# 1. ADF de la serie original en niveles con constante
+adf_nivel_c = adfuller(serie_oro, regression="c", autolag="AIC")
+print("ADF DE LA SERIE ORIGINAL EN NIVELES: CON CONSTANTE")
+print("Estadístico ADF:", adf_nivel_c[0])
+print("Valor p:", adf_nivel_c[1])
+print("Rezagos utilizados:", adf_nivel_c[2])
+print("Valores críticos:", adf_nivel_c[4])
 
-# 1. Seleccionar el precio real trimestral del oro
-serie_oro = datos_trimestrales["real_gold_price"].dropna()
+# 2. ADF de la serie original en niveles con constante y tendencia
+adf_nivel_ct = adfuller(serie_oro, regression="ct", autolag="AIC")
+print("\nADF DE LA SERIE ORIGINAL EN NIVELES: CON CONSTANTE Y TENDENCIA")
+print("Estadístico ADF:", adf_nivel_ct[0])
+print("Valor p:", adf_nivel_ct[1])
+print("Rezagos utilizados:", adf_nivel_ct[2])
+print("Valores críticos:", adf_nivel_ct[4])
 
-# 2. ADF con constante
-resultado_adf = adfuller(serie_oro, regression="c", autolag="AIC")
+# %% CUARTA PARTE. Primera diferencia de la serie original
 
-print("ADF trimestral con constante")
-print("Estadístico ADF:", resultado_adf[0])
-print("Valor p:", resultado_adf[1])
-print("Rezagos utilizados:", resultado_adf[2])
-print("Valores críticos:", resultado_adf[4])
-
-# 3. ADF con constante y tendencia
-resultado_adf_tendencia = adfuller(serie_oro, regression="ct", autolag="AIC")
-
-print("\nADF trimestral con constante y tendencia")
-print("Estadístico ADF:", resultado_adf_tendencia[0])
-print("Valor p:", resultado_adf_tendencia[1])
-print("Rezagos utilizados:", resultado_adf_tendencia[2])
-print("Valores críticos:", resultado_adf_tendencia[4])
-
-# %% CUARTA PARTE. Primera diferencia y prueba ADF trimestral
-
-from statsmodels.tsa.stattools import adfuller
-
-# 1. Calcular el cambio trimestral del precio real del oro
+# 1. Calcular la primera diferencia del precio real del oro
 serie_oro_dif = serie_oro.diff().dropna()
 
-# 2. Aplicar la prueba ADF con constante
-resultado_adf_dif = adfuller(serie_oro_dif, regression="c", autolag="AIC")
-
-# 3. Mostrar los resultados
-print("ADF de la primera diferencia trimestral")
-print("Estadístico ADF:", resultado_adf_dif[0])
-print("Valor p:", resultado_adf_dif[1])
-print("Rezagos utilizados:", resultado_adf_dif[2])
-print("Observaciones utilizadas:", resultado_adf_dif[3])
-
-print("\nValores críticos:")
-for nivel, valor in resultado_adf_dif[4].items():
-    print(f"{nivel}: {valor}")
-
-# %% QUINTA PARTE. Gráfica de la primera diferencia trimestral
-
-import matplotlib.pyplot as plt
-
+# 2. Graficar la primera diferencia
 plt.figure(figsize=(12, 5))
-
-plt.plot(datos_trimestrales["date"].iloc[1:], serie_oro_dif, linewidth=1)
-
-plt.axhline(y=0, linestyle="--", linewidth=1)
-
-plt.title("Primera diferencia trimestral del precio real del oro")
+plt.plot(serie_oro_dif.index, serie_oro_dif, linewidth=1)
+plt.axhline(y=0, linestyle="--", linewidth=1, color="black")
+plt.title("Primera diferencia del precio real trimestral del oro")
 plt.xlabel("Fecha")
 plt.ylabel("Cambio trimestral del precio")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-
 plt.show()
-# %% SEXTA PARTE. Identificación: ACF y PACF de la primera diferencia trimestral
 
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-import matplotlib.pyplot as plt
+# 3. ADF de la primera diferencia del precio original
+adf_dif = adfuller(serie_oro_dif, regression="c", autolag="AIC")
+print("ADF DE LA PRIMERA DIFERENCIA DEL PRECIO ORIGINAL")
+print("Estadístico ADF:", adf_dif[0])
+print("Valor p:", adf_dif[1])
+print("Rezagos utilizados:", adf_dif[2])
+print("Observaciones utilizadas:", adf_dif[3])
+print("Valores críticos:", adf_dif[4])
 
-# Crear las dos gráficas
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+# 4. Explorar visualmente si la variabilidad de los cambios parece constante
+# La desviación estándar móvil resume la dispersión en ventanas de 20 trimestres.
+# Es una herramienta exploratoria, no una prueba formal de heterocedasticidad.
+desviacion_movil = serie_oro_dif.rolling(window=20).std()
 
-# ACF: autocorrelación
-plot_acf(serie_oro_dif, lags=20, zero=False, ax=axes[0])
-axes[0].set_title("ACF de la primera diferencia trimestral")
+fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+axes[0].plot(serie_oro_dif.index, serie_oro_dif, linewidth=1)
+axes[0].axhline(0, linestyle="--", linewidth=1, color="black")
+axes[0].set_title("Cambios trimestrales del precio real del oro")
+axes[0].set_ylabel("Primera diferencia")
+axes[0].grid(True, alpha=0.3)
 
-# PACF: autocorrelación parcial
-plot_pacf(serie_oro_dif, lags=20, method="ywm", zero=False, ax=axes[1])
-axes[1].set_title("PACF de la primera diferencia trimestral")
+axes[1].plot(desviacion_movil.index, desviacion_movil, linewidth=1.2)
+axes[1].set_title("Desviación estándar móvil de los cambios (ventana de 20 trimestres)")
+axes[1].set_xlabel("Fecha")
+axes[1].set_ylabel("Desviación estándar móvil")
+axes[1].grid(True, alpha=0.3)
 
 plt.tight_layout()
 plt.show()
 
-# %% SEPTIMA PARTE. serie trimestral con su índice de fechas
-serie_oro = datos_trimestrales.set_index("date")["real_gold_price"].asfreq("QE")
+# %% QUINTA PARTE. Transformación logarítmica de la serie original
 
-from statsmodels.tsa.arima.model import ARIMA
+# La transformación logarítmica se aplica a la serie original positiva,
+# no a la primera diferencia, que puede contener valores negativos.
+if (serie_oro <= 0).any():
+    raise ValueError("La serie debe contener valores positivos para aplicar logaritmos.")
 
-# 2. Estimar ARIMA(1,1,0)
-modelo_110 = ARIMA(serie_oro, order=(1, 1, 0), trend="t").fit()
-
-# 3. Estimar ARIMA(0,1,1)
-modelo_011 = ARIMA(serie_oro, order=(0, 1, 1), trend="t").fit()
-
-# 4. Estimar ARIMA(1,1,1)
-modelo_111 = ARIMA(serie_oro, order=(1, 1, 1), trend="t").fit()
-
-# 5. Comparar los criterios de información
-print("Comparación de modelos ARIMA")
-print("-----------------------------------")
-
-print("ARIMA(1,1,0) - AIC:", modelo_110.aic, "| BIC:", modelo_110.bic)
-
-print("ARIMA(0,1,1) - AIC:", modelo_011.aic, "| BIC:", modelo_011.bic)
-
-print("ARIMA(1,1,1) - AIC:", modelo_111.aic, "| BIC:", modelo_111.bic)
-# %% OCTAVA PARTE. Validación del modelo ARIMA(1,1,0)
-
-from statsmodels.stats.diagnostic import acorr_ljungbox
-from statsmodels.graphics.tsaplots import plot_acf
-import matplotlib.pyplot as plt
-
-# 1. Obtener los residuos del modelo
-residuos = modelo_110.resid
-
-# 2. Graficar los residuos y su autocorrelación
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-axes[0].plot(residuos, linewidth=1)
-axes[0].axhline(y=0, linestyle="--", linewidth=1)
-axes[0].set_title("Residuos del ARIMA(1,1,0)")
-axes[0].set_xlabel("Observación")
-axes[0].set_ylabel("Residuo")
-
-plot_acf(residuos, lags=20, zero=False, ax=axes[1])
-axes[1].set_title("ACF de los residuos")
-
-plt.tight_layout()
-plt.show()
-
-# 3. Prueba de Ljung-Box
-resultado_ljung_box = acorr_ljungbox(residuos, lags=[8, 12], model_df=1, return_df=True)
-
-print("\nPrueba de Ljung-Box:")
-print(resultado_ljung_box)
-
-# %% NOVENA PARTE. Validación: distribución de los residuos
-
-import matplotlib.pyplot as plt
-from scipy.stats import probplot, jarque_bera
-
-# 1. Histograma de los residuos
-fig, axes = plt.subplots(1, 2, figsize=(12, 5))
-
-axes[0].hist(residuos, bins=20, edgecolor="black")
-axes[0].set_title("Distribución de los residuos")
-axes[0].set_xlabel("Residuo")
-axes[0].set_ylabel("Frecuencia")
-
-# 2. Gráfica Q-Q frente a una distribución normal
-probplot(residuos, dist="norm", plot=axes[1])
-axes[1].set_title("Gráfica Q-Q de los residuos")
-
-plt.tight_layout()
-plt.show()
-
-# 3. Prueba de normalidad de Jarque-Bera
-resultado_jb = jarque_bera(residuos)
-
-print("Prueba de Jarque-Bera")
-print("Estadístico:", resultado_jb.statistic)
-print("Valor p:", resultado_jb.pvalue)
-
-# %% DECIMA PARTE. Validación: prueba ARCH sobre los residuos
-
-from statsmodels.stats.diagnostic import het_arch
-
-# Aplicar la prueba ARCH LM
-resultado_arch = het_arch(residuos, nlags=8)
-
-print("Prueba ARCH LM")
-print("Estadístico LM:", resultado_arch[0])
-print("Valor p:", resultado_arch[1])
-
-# Interpretación
-if resultado_arch[1] < 0.05:
-    print("Se rechaza H0: hay evidencia de efectos ARCH.")
-else:
-    print("No se rechaza H0: no hay evidencia suficiente de efectos ARCH.")
-
-# %% ONCEAVA PARTE. Comparación de los diagnósticos de los modelos
-
-from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
-from scipy.stats import jarque_bera
-import pandas as pd
-
-# 1. Organizar los tres modelos candidatos
-modelos = {
-    "ARIMA(1,1,0)": (modelo_110, 1),
-    "ARIMA(0,1,1)": (modelo_011, 1),
-    "ARIMA(1,1,1)": (modelo_111, 2),
-}
-
-# 2. Aplicar las pruebas a los residuos de cada modelo
-resultados = []
-
-for nombre, (modelo, grados_libertad) in modelos.items():
-    residuos_modelo = modelo.resid.dropna()
-
-    # Prueba de autocorrelación: Ljung-Box
-    lb = acorr_ljungbox(
-        residuos_modelo, lags=[8], model_df=grados_libertad, return_df=True
-    )
-
-    # Prueba de normalidad: Jarque-Bera
-    jb = jarque_bera(residuos_modelo)
-
-    # Prueba de heterocedasticidad: ARCH LM
-    arch = het_arch(residuos_modelo, nlags=8)
-
-    resultados.append(
-        {
-            "Modelo": nombre,
-            "AIC": modelo.aic,
-            "BIC": modelo.bic,
-            "Ljung-Box p": lb["lb_pvalue"].iloc[0],
-            "Jarque-Bera p": jb.pvalue,
-            "ARCH p": arch[1],
-        }
-    )
-
-# 3. Mostrar la comparación
-tabla_diagnosticos = pd.DataFrame(resultados)
-
-print(tabla_diagnosticos.to_string(index=False))
-
-# %% DOCEAVA PARTE. Transformación logarítmica
-
-import numpy as np
-import matplotlib.pyplot as plt
-
-# 1. Recuperar la serie trimestral
-serie_oro = (
-    datos_trimestrales
-    .set_index("date")["real_gold_price"]
-    .asfreq("QE")
-)
-
-# 2. Aplicar la transformación logarítmica
 serie_oro_log = np.log(serie_oro)
 
-# 3. Graficar la serie original y la transformada
+# 1. Comparar visualmente los niveles originales con sus logaritmos
 fig, axes = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-
-# Precio real en niveles
 axes[0].plot(serie_oro.index, serie_oro, linewidth=1)
 axes[0].set_title("Precio real trimestral del oro en niveles")
 axes[0].set_ylabel("Precio real")
 axes[0].grid(True, alpha=0.3)
 
-# Precio real en logaritmos
 axes[1].plot(serie_oro_log.index, serie_oro_log, linewidth=1)
 axes[1].set_title("Logaritmo del precio real trimestral del oro")
 axes[1].set_xlabel("Fecha")
@@ -342,134 +173,98 @@ axes[1].grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
-
-# 4. Comprobar la estacionariedad del logaritmo
-
-from statsmodels.tsa.stattools import adfuller
-
-# ADF con constante
-adf_log_c = adfuller(
-    serie_oro_log,
-    regression="c",
-    autolag="AIC"
-)
-
-print("\nADF del logaritmo con constante")
-print("Estadístico:", adf_log_c[0])
+# 2. ADF del logaritmo en niveles con constante
+adf_log_c = adfuller(serie_oro_log, regression="c", autolag="AIC")
+print("ADF DEL LOGARITMO EN NIVELES: CON CONSTANTE")
+print("Estadístico ADF:", adf_log_c[0])
 print("Valor p:", adf_log_c[1])
+print("Rezagos utilizados:", adf_log_c[2])
 print("Valores críticos:", adf_log_c[4])
 
-
-# ADF con constante y tendencia
-adf_log_ct = adfuller(
-    serie_oro_log,
-    regression="ct",
-    autolag="AIC"
-)
-
-print("\nADF del logaritmo con constante y tendencia")
-print("Estadístico:", adf_log_ct[0])
+# 3. ADF del logaritmo en niveles con constante y tendencia
+adf_log_ct = adfuller(serie_oro_log, regression="ct", autolag="AIC")
+print("\nADF DEL LOGARITMO EN NIVELES: CON CONSTANTE Y TENDENCIA")
+print("Estadístico ADF:", adf_log_ct[0])
 print("Valor p:", adf_log_ct[1])
+print("Rezagos utilizados:", adf_log_ct[2])
 print("Valores críticos:", adf_log_ct[4])
 
-# 5. Primera diferencia del logaritmo
+# %% SEXTA PARTE. Primera diferencia del logaritmo y estacionariedad
 
+# 1. Diferenciar el logaritmo; aproxima la tasa de crecimiento del precio
 serie_oro_log_dif = serie_oro_log.diff().dropna()
 
-# 6. Graficar la primera diferencia del logaritmo
-
+# 2. Graficar la primera diferencia del logaritmo
 plt.figure(figsize=(12, 5))
-
-plt.plot(
-    serie_oro_log.index[1:],
-    serie_oro_log_dif,
-    linewidth=1
-)
-
-plt.axhline(y=0, linestyle="--", linewidth=1)
-
+plt.plot(serie_oro_log_dif.index, serie_oro_log_dif, linewidth=1)
+plt.axhline(y=0, linestyle="--", linewidth=1, color="black")
 plt.title("Primera diferencia del logaritmo del precio real del oro")
 plt.xlabel("Fecha")
 plt.ylabel("Cambio del logaritmo")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-
 plt.show()
 
-# 7. Prueba ADF de la primera diferencia del logaritmo
+# 3. ADF de la primera diferencia del logaritmo
+adf_log_dif = adfuller(serie_oro_log_dif, regression="c", autolag="AIC")
+print("ADF DE LA PRIMERA DIFERENCIA DEL LOGARITMO")
+print("Estadístico ADF:", adf_log_dif[0])
+print("Valor p:", adf_log_dif[1])
+print("Rezagos utilizados:", adf_log_dif[2])
+print("Observaciones utilizadas:", adf_log_dif[3])
+print("Valores críticos:", adf_log_dif[4])
 
-resultado_log_dif = adfuller(
-    serie_oro_log_dif,
-    regression="c",
-    autolag="AIC"
-)
+# %% SÉPTIMA PARTE. Identificación: ACF y PACF del logaritmo diferenciado
 
-print("ADF de la primera diferencia del logaritmo")
-print("Estadístico ADF:", resultado_log_dif[0])
-print("Valor p:", resultado_log_dif[1])
-print("Rezagos utilizados:", resultado_log_dif[2])
-print("Valores críticos:", resultado_log_dif[4])
-
-# %% TRECEAVA PARTE. Identificación del logaritmo diferenciado: ACF y PACF
-
-from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
-import matplotlib.pyplot as plt
-
-# Crear las dos gráficas
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-
-# ACF de la primera diferencia del logaritmo
 plot_acf(serie_oro_log_dif, lags=20, zero=False, ax=axes[0])
-axes[0].set_title("ACF del logaritmo diferenciado")
-
-# PACF de la primera diferencia del logaritmo
-plot_pacf(
-    serie_oro_log_dif,
-    lags=20,
-    method="ywm",
-    zero=False,
-    ax=axes[1]
-)
-axes[1].set_title("PACF del logaritmo diferenciado")
-
+axes[0].set_title("ACF de la primera diferencia del logaritmo")
+plot_pacf(serie_oro_log_dif, lags=20, method="ywm", zero=False, ax=axes[1])
+axes[1].set_title("PACF de la primera diferencia del logaritmo")
 plt.tight_layout()
 plt.show()
 
-# %% CATORCEAVA PARTE. Estimación y comparación de modelos ARIMA
+# %% OCTAVA PARTE. Revisión exploratoria de estacionalidad trimestral
 
-from statsmodels.tsa.arima.model import ARIMA
-import pandas as pd
+# En datos trimestrales, revisar los múltiplos de cuatro rezagos.
+valores_acf = acf(serie_oro_log_dif, nlags=20, fft=False)
+rezagos_estacionales = [4, 8, 12, 16, 20]
+limite_acf = 1.96 / np.sqrt(len(serie_oro_log_dif))
 
-# 1. Definir todos los modelos candidatos
-# Definir los modelos candidatos
-# trend="n": sin deriva
-# trend="t": con deriva
+tabla_estacionalidad = pd.DataFrame({
+    "Rezago": rezagos_estacionales,
+    "ACF": [valores_acf[rezago] for rezago in rezagos_estacionales]
+})
+tabla_estacionalidad["Fuera de la banda"] = (
+    tabla_estacionalidad["ACF"].abs() > limite_acf
+)
 
+print("REVISIÓN EXPLORATORIA DE LA ESTACIONALIDAD")
+print(tabla_estacionalidad.round(4).to_string(index=False))
+print(f"Banda aproximada del 95 %: ±{limite_acf:.4f}")
+
+# %% NOVENA PARTE. Estimación y comparación de modelos ARIMA
+
+# trend="n": sin deriva; trend="t": con deriva.
 especificaciones = [
     ("ARIMA(1,1,0) sin deriva", (1, 1, 0), "n"),
     ("ARIMA(1,1,0) con deriva", (1, 1, 0), "t"),
-
     ("ARIMA(0,1,1) sin deriva", (0, 1, 1), "n"),
     ("ARIMA(0,1,1) con deriva", (0, 1, 1), "t"),
-
     ("ARIMA(1,1,1) sin deriva", (1, 1, 1), "n"),
     ("ARIMA(1,1,1) con deriva", (1, 1, 1), "t")
 ]
 
-# 2. Estimar todos los modelos sobre la misma serie
 modelos_candidatos = {}
 resultados_estimacion = []
 
 for nombre, orden, tendencia in especificaciones:
-
     modelo = ARIMA(
         serie_oro_log,
         order=orden,
         trend=tendencia
     ).fit()
-
     modelos_candidatos[nombre] = modelo
-
     resultados_estimacion.append({
         "Modelo": nombre,
         "Log-verosimilitud": modelo.llf,
@@ -477,108 +272,173 @@ for nombre, orden, tendencia in especificaciones:
         "BIC": modelo.bic
     })
 
-# 3. Comparar los seis modelos
 tabla_modelos = pd.DataFrame(resultados_estimacion)
-
 print("COMPARACIÓN DE LOS SEIS MODELOS CANDIDATOS")
-print("==========================================")
+print(tabla_modelos.sort_values("BIC").round(4).to_string(index=False))
 
-print(
-    tabla_modelos
-    .sort_values("BIC")
-    .to_string(index=False)
-)
+# %% DÉCIMA PARTE. Diagnóstico estadístico de los modelos ARIMA
 
-# %% QUINCEAVA PARTE. Diagnóstico de residuos estandarizados
+resultados_diagnosticos = []
 
-from statsmodels.stats.diagnostic import acorr_ljungbox, het_arch
-from scipy.stats import jarque_bera
-import numpy as np
-import pandas as pd
+for nombre, modelo in modelos_candidatos.items():
+    # Residuos originales, sin estandarizar.
+    residuos = pd.Series(modelo.resid).dropna()
 
-# 1. Preparar los resultados
-resultados_diagnostico = []
+    # Se omite el periodo inicial señalado por loglikelihood_burn solo del
+    # diagnóstico; no se elimina ninguna observación de la serie ni se reestima.
+    residuos = residuos.iloc[modelo.loglikelihood_burn:]
 
-# 2. Evaluar los seis modelos
-for nombre, orden, tendencia in especificaciones:
-
-    modelo = modelos_candidatos[nombre]
-
-    # Obtener residuos estandarizados de un paso adelante
-    residuos = pd.Series(
-        modelo.filter_results.standardized_forecasts_error[0]
+    orden = next(
+        orden
+        for nombre_esp, orden, tendencia in especificaciones
+        if nombre_esp == nombre
     )
+    p, d, q = orden
 
-    # Excluir valores no finitos
-    residuos = residuos.replace(
-        [np.inf, -np.inf], np.nan
-    ).dropna()
-
-    # Grados de libertad para Ljung-Box
-    grados_libertad = orden[0] + orden[2]
-
-    # Prueba de autocorrelación
+    # Ljung-Box: H0 = no hay autocorrelación residual hasta el rezago evaluado.
     lb = acorr_ljungbox(
         residuos,
-        lags=[8],
-        model_df=grados_libertad,
+        lags=[8, 12],
+        model_df=p + q,
         return_df=True
     )
 
-    # Prueba de normalidad
+    # Jarque-Bera: H0 = los residuos siguen una distribución normal.
     jb = jarque_bera(residuos)
 
-    # Prueba ARCH-LM
+    # ARCH LM: H0 = no hay efectos ARCH.
     arch = het_arch(residuos, nlags=8)
 
-    # Guardar resultados
-    resultados_diagnostico.append({
+    resultados_diagnosticos.append({
         "Modelo": nombre,
-        "AIC": modelo.aic,
-        "BIC": modelo.bic,
-        "Ljung-Box p": lb["lb_pvalue"].iloc[0],
+        "Ljung-Box p (8)": lb.loc[8, "lb_pvalue"],
+        "Ljung-Box p (12)": lb.loc[12, "lb_pvalue"],
         "Jarque-Bera p": jb.pvalue,
         "ARCH p": arch[1]
     })
 
-# 3. Mostrar resultados
-tabla_diagnosticos = pd.DataFrame(resultados_diagnostico)
+tabla_diagnosticos = pd.DataFrame(resultados_diagnosticos)
+print("DIAGNÓSTICO DE LOS MODELOS ARIMA")
+print(tabla_diagnosticos.to_string(
+    index=False,
+    formatters={
+        "Ljung-Box p (8)": lambda x: f"{x:.4f}",
+        "Ljung-Box p (12)": lambda x: f"{x:.4f}",
+        "Jarque-Bera p": lambda x: f"{x:.4g}",
+        "ARCH p": lambda x: f"{x:.3e}"
+    }
+))
 
-print("DIAGNÓSTICO CON RESIDUOS ESTANDARIZADOS")
-print(tabla_diagnosticos.sort_values("BIC").to_string(index=False))
-# %% DOCEAVA PARTE. Estimación del Modelo ARIMA (1,1,0)
+# %% UNDÉCIMA PARTE. Diagnóstico gráfico del modelo candidato
 
-# 1. Crear un objeto de la clase ARIMA (Asociado a un AR(1))
+# Candidato provisional: ARIMA(1,1,0) sin deriva, elegido inicialmente por BIC.
+modelo_candidato = modelos_candidatos["ARIMA(1,1,0) sin deriva"]
+residuos_candidato = pd.Series(modelo_candidato.resid).dropna()
+residuos_candidato = residuos_candidato.iloc[modelo_candidato.loglikelihood_burn:]
 
-import numpy as np
+fig, axes = plt.subplots(2, 2, figsize=(13, 9))
 
-modelo_ar1 = ARIMA(np.log(serie_oro), order=(1, 1, 0), trend="t").fit()
+# 1. Residuos a lo largo del tiempo
+axes[0, 0].plot(residuos_candidato.index, residuos_candidato, linewidth=1)
+axes[0, 0].axhline(0, color="black", linestyle="--")
+axes[0, 0].set_title("Residuos del ARIMA(1,1,0) sin deriva")
+axes[0, 0].set_xlabel("Fecha")
+axes[0, 0].set_ylabel("Residuo")
 
-# 2. Objeto tipo ARIMA del paquete statmodels
+# 2. ACF de los residuos
+plot_acf(residuos_candidato, lags=20, zero=False, ax=axes[0, 1])
+axes[0, 1].set_title("ACF de los residuos")
 
-type(modelo_ar1)
+# 3. ACF de los residuos al cuadrado: dependencia en la volatilidad
+plot_acf(residuos_candidato**2, lags=20, zero=False, ax=axes[1, 0])
+axes[1, 0].set_title("ACF de los residuos al cuadrado")
 
-print(modelo_ar1.summary())
+# 4. Gráfica Q-Q para examinar la normalidad
+probplot(residuos_candidato, dist="norm", plot=axes[1, 1])
+axes[1, 1].set_title("Gráfica Q-Q de los residuos")
 
-# %%
-# Dado que en la parte ar.L1 0.3300>0.000, es altamente significativo, lo que confirma que el precio del oro en el trimestre anterior tiene un impacto real en el precio actual.
-# %%
-# Dado que en la tendencia x1 0.0087<0.239, la tendencia lineal no es estadísticamente significativa. Se intentará hacer una versión sin este parámetro para ver si el modelo mejora.
-# %%
-# Cumplimiento del Ruido Blanco: Dado que la prueba de Ljung-Box con Prob(Q) es 0.69>0.05, indica que no queda información residual oculta; el modelo capturó bien la dinámica temporal y no hay autocorrelación serial.
-# %%
-# La prueba de Jarque-Bera con Prob(JB) es 0.13>0.05, indica que los residuos se distribuyen de forma normal.
-# %%
-# La prueba de Heterocedasticidad con Prob(H) es 0.09>0.05, indica que está cerca del límite pero sí lo supera, por lo que se asume que la volatilidad de los errores es estable a lo largo de las observaciones.
+plt.tight_layout()
+plt.show()
 
-# 3. Prueba del modelo sin tendencia.
+# %% DUODÉCIMA PARTE. Pronóstico de diez trimestres
 
-# 1. Estimar el modelo sin la tendencia
-modelo_ar1_sin_tendencia = ARIMA(np.log(serie_oro), order=(1, 1, 0), trend="n").fit()
+# Modelo principal provisional: ARIMA(1,1,0) sin deriva.
+modelo_final = modelos_candidatos["ARIMA(1,1,0) sin deriva"]
+resultado_pronostico = modelo_final.get_forecast(steps=10)
 
-# 2. Imprimir el nuevo resumen estadístico
-print(modelo_ar1_sin_tendencia.summary())
+# Pronóstico e intervalos en la escala del logaritmo.
+pronostico_log = resultado_pronostico.predicted_mean
+intervalos_log = resultado_pronostico.conf_int(alpha=0.05)
 
-# El modelo sin tendencia es superior al modelo anterior porque al eliminar la variable que no aporta información sustancial, se hace más parsimonioso sin sacrificar poder explicativo.
+tabla_pronostico = pd.DataFrame(index=pronostico_log.index)
 
-# El peso del rezago trimestral sube ligeramente, los criterios de información son menores, y se siguen manteniendo los resultados de los supuestos.
+# Media condicional corregida bajo el supuesto de normalidad predictiva en logaritmos.
+# La prueba ARCH detectó heterocedasticidad, por lo que esta corrección es aproximada.
+varianza_pronostico = resultado_pronostico.var_pred_mean
+tabla_pronostico["Pronóstico medio corregido"] = np.exp(
+    pronostico_log + 0.5 * varianza_pronostico
+)
+
+# Transformar a la escala original los límites del intervalo predictivo.
+tabla_pronostico["Límite inferior 95%"] = np.exp(intervalos_log.iloc[:, 0])
+tabla_pronostico["Límite superior 95%"] = np.exp(intervalos_log.iloc[:, 1])
+tabla_pronostico.index.name = "Fecha"
+
+print("PRONÓSTICO DEL PRECIO REAL DEL ORO")
+print(tabla_pronostico.round(2).to_string())
+
+# Graficar observaciones, pronóstico e intervalos.
+plt.figure(figsize=(12, 5))
+plt.plot(serie_oro.index, serie_oro, label="Precio observado")
+plt.plot(
+    tabla_pronostico.index,
+    tabla_pronostico["Pronóstico medio corregido"],
+    label="Pronóstico medio corregido"
+)
+plt.fill_between(
+    tabla_pronostico.index,
+    tabla_pronostico["Límite inferior 95%"],
+    tabla_pronostico["Límite superior 95%"],
+    alpha=0.2,
+    label="Intervalo de predicción del 95%"
+)
+plt.title("Pronóstico del precio real del oro: 10 trimestres")
+plt.xlabel("Fecha")
+plt.ylabel("Precio real del oro")
+plt.legend()
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.show()
+
+# %% DECIMOTERCERA PARTE. Coeficientes y ecuación del modelo principal
+
+# 1. Mostrar coeficientes, errores estándar y valores p.
+tabla_coeficientes = pd.DataFrame({
+    "Coeficiente": modelo_final.params,
+    "Error estándar": modelo_final.bse,
+    "Valor p": modelo_final.pvalues
+})
+print("COEFICIENTES DEL ARIMA(1,1,0) SIN DERIVA")
+print(tabla_coeficientes.to_string(
+    formatters={
+        "Coeficiente": lambda x: f"{x:.5f}",
+        "Error estándar": lambda x: f"{x:.5f}",
+        "Valor p": lambda x: f"{x:.3e}"
+    }
+))
+
+# 2. Presentar la ecuación estimada.
+parametros = dict(zip(modelo_final.param_names, modelo_final.params))
+phi = parametros["ar.L1"]
+varianza_error = parametros["sigma2"]
+
+print("\nECUACIÓN ESTIMADA")
+print(f"Δ ln(Y_t) = {phi:.4f} Δ ln(Y_(t-1)) + ε_t")
+
+# 3. Información general del modelo.
+print("\nINFORMACIÓN DEL MODELO")
+print("Observaciones:", int(modelo_final.nobs))
+print("AIC:", round(modelo_final.aic, 4))
+print("BIC:", round(modelo_final.bic, 4))
+print("Varianza estimada de las innovaciones:", round(varianza_error, 6))
+print("Desviación estándar estimada:", round(np.sqrt(varianza_error), 5))
