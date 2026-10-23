@@ -442,3 +442,36 @@ print("AIC:", round(modelo_final.aic, 4))
 print("BIC:", round(modelo_final.bic, 4))
 print("Varianza estimada de las innovaciones:", round(varianza_error, 6))
 print("Desviación estándar estimada:", round(np.sqrt(varianza_error), 5))
+
+# %% DIECINUEVEAVA PARTE. Prueba de significancia del estimador
+
+# 1. Extraer el coeficiente AR(1) estimado
+phi = modelo_final.params["ar.L1"]
+
+# 2. Obtener el error estándar, estadístico z y valor p
+error_estandar = modelo_final.bse["ar.L1"]
+estadistico_z = modelo_final.tvalues["ar.L1"]
+valor_p = modelo_final.pvalues["ar.L1"]
+
+# 3. Definir las hipótesis
+# H0: el coeficiente AR(1) es igual a cero
+# H1: el coeficiente AR(1) es diferente de cero
+
+nivel_significancia = 0.05
+
+# 4. Mostrar los resultados
+print("PRUEBA DE SIGNIFICANCIA DEL COEFICIENTE AR(1)")
+print("---------------------------------------------")
+print(f"Coeficiente estimado: {phi:.5f}")
+print(f"Error estándar: {error_estandar:.5f}")
+print(f"Estadístico z: {estadistico_z:.4f}")
+print(f"Valor p: {valor_p:.3e}")
+
+# 5. Tomar la decisión estadística
+if valor_p < nivel_significancia:
+    print("\nDecisión: se rechaza H0.")
+    print("El coeficiente AR(1) es estadísticamente significativo.")
+else:
+    print("\nDecisión: no se rechaza H0.")
+    print("No hay evidencia suficiente de que el coeficiente AR(1) sea distinto de cero.")
+
