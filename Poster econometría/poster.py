@@ -168,6 +168,8 @@ plt.show()
 # %% SEPTIMA PARTE. serie trimestral con su índice de fechas
 serie_oro = datos_trimestrales.set_index("date")["real_gold_price"].asfreq("QE")
 
+from statsmodels.tsa.arima.model import ARIMA
+
 # 2. Estimar ARIMA(1,1,0)
 modelo_110 = ARIMA(serie_oro, order=(1, 1, 0), trend="t").fit()
 
