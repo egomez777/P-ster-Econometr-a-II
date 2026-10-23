@@ -43,9 +43,7 @@ print(datos.isna().sum())
 
 # 5. Comprobar si falta algún mes
 calendario = pd.date_range(
-    start=datos["date"].min(),
-    end=datos["date"].max(),
-    freq="MS"
+    start=datos["date"].min(), end=datos["date"].max(), freq="MS"
 )
 fechas_faltantes = calendario.difference(datos["date"])
 print("\nMeses esperados:", len(calendario))
@@ -84,6 +82,21 @@ plt.grid(True, alpha=0.3)
 plt.tight_layout()
 plt.show()
 
+# 4. Graficar la FAC y FACP de la serie original en niveles
+# Estas gráficas ayudan a visualizar la persistencia de la serie original.
+
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+plot_acf(serie_oro, lags=20, zero=False, ax=axes[0])
+axes[0].set_title("FAC de la serie original")
+axes[0].set_xlabel("Rezago trimestral")
+
+plot_pacf(serie_oro, lags=20, method="ywm", zero=False, ax=axes[1])
+axes[1].set_title("FACP de la serie original")
+axes[1].set_xlabel("Rezago trimestral")
+
+plt.tight_layout()
+plt.show()
 # %% TERCERA PARTE. Identificación inicial de la no estacionariedad
 
 # 1. ADF de la serie original en niveles con constante
@@ -153,7 +166,9 @@ plt.show()
 # La transformación logarítmica se aplica a la serie original positiva,
 # no a la primera diferencia, que puede contener valores negativos.
 if (serie_oro <= 0).any():
-    raise ValueError("La serie debe contener valores positivos para aplicar logaritmos.")
+    raise ValueError(
+        "La serie debe contener valores positivos para aplicar logaritmos."
+    )
 
 serie_oro_log = np.log(serie_oro)
 
@@ -231,10 +246,12 @@ valores_acf = acf(serie_oro_log_dif, nlags=20, fft=False)
 rezagos_estacionales = [4, 8, 12, 16, 20]
 limite_acf = 1.96 / np.sqrt(len(serie_oro_log_dif))
 
-tabla_estacionalidad = pd.DataFrame({
-    "Rezago": rezagos_estacionales,
-    "ACF": [valores_acf[rezago] for rezago in rezagos_estacionales]
-})
+tabla_estacionalidad = pd.DataFrame(
+    {
+        "Rezago": rezagos_estacionales,
+        "ACF": [valores_acf[rezago] for rezago in rezagos_estacionales],
+    }
+)
 tabla_estacionalidad["Fuera de la banda"] = (
     tabla_estacionalidad["ACF"].abs() > limite_acf
 )
@@ -252,25 +269,23 @@ especificaciones = [
     ("ARIMA(0,1,1) sin deriva", (0, 1, 1), "n"),
     ("ARIMA(0,1,1) con deriva", (0, 1, 1), "t"),
     ("ARIMA(1,1,1) sin deriva", (1, 1, 1), "n"),
-    ("ARIMA(1,1,1) con deriva", (1, 1, 1), "t")
+    ("ARIMA(1,1,1) con deriva", (1, 1, 1), "t"),
 ]
 
 modelos_candidatos = {}
 resultados_estimacion = []
 
 for nombre, orden, tendencia in especificaciones:
-    modelo = ARIMA(
-        serie_oro_log,
-        order=orden,
-        trend=tendencia
-    ).fit()
+    modelo = ARIMA(serie_oro_log, order=orden, trend=tendencia).fit()
     modelos_candidatos[nombre] = modelo
-    resultados_estimacion.append({
-        "Modelo": nombre,
-        "Log-verosimilitud": modelo.llf,
-        "AIC": modelo.aic,
-        "BIC": modelo.bic
-    })
+    resultados_estimacion.append(
+        {
+            "Modelo": nombre,
+            "Log-verosimilitud": modelo.llf,
+            "AIC": modelo.aic,
+            "BIC": modelo.bic,
+        }
+    )
 
 tabla_modelos = pd.DataFrame(resultados_estimacion)
 print("COMPARACIÓN DE LOS SEIS MODELOS CANDIDATOS")
@@ -286,7 +301,7 @@ for nombre, modelo in modelos_candidatos.items():
 
     # Se omite el periodo inicial señalado por loglikelihood_burn solo del
     # diagnóstico; no se elimina ninguna observación de la serie ni se reestima.
-    residuos = residuos.iloc[modelo.loglikelihood_burn:]
+    residuos = residuos.iloc[modelo.loglikelihood_burn :]
 
     orden = next(
         orden
@@ -296,12 +311,7 @@ for nombre, modelo in modelos_candidatos.items():
     p, d, q = orden
 
     # Ljung-Box: H0 = no hay autocorrelación residual hasta el rezago evaluado.
-    lb = acorr_ljungbox(
-        residuos,
-        lags=[8, 12],
-        model_df=p + q,
-        return_df=True
-    )
+    lb = acorr_ljungbox(residuos, lags=[8, 12], model_df=p + q, return_df=True)
 
     # Jarque-Bera: H0 = los residuos siguen una distribución normal.
     jb = jarque_bera(residuos)
@@ -309,32 +319,36 @@ for nombre, modelo in modelos_candidatos.items():
     # ARCH LM: H0 = no hay efectos ARCH.
     arch = het_arch(residuos, nlags=8)
 
-    resultados_diagnosticos.append({
-        "Modelo": nombre,
-        "Ljung-Box p (8)": lb.loc[8, "lb_pvalue"],
-        "Ljung-Box p (12)": lb.loc[12, "lb_pvalue"],
-        "Jarque-Bera p": jb.pvalue,
-        "ARCH p": arch[1]
-    })
+    resultados_diagnosticos.append(
+        {
+            "Modelo": nombre,
+            "Ljung-Box p (8)": lb.loc[8, "lb_pvalue"],
+            "Ljung-Box p (12)": lb.loc[12, "lb_pvalue"],
+            "Jarque-Bera p": jb.pvalue,
+            "ARCH p": arch[1],
+        }
+    )
 
 tabla_diagnosticos = pd.DataFrame(resultados_diagnosticos)
 print("DIAGNÓSTICO DE LOS MODELOS ARIMA")
-print(tabla_diagnosticos.to_string(
-    index=False,
-    formatters={
-        "Ljung-Box p (8)": lambda x: f"{x:.4f}",
-        "Ljung-Box p (12)": lambda x: f"{x:.4f}",
-        "Jarque-Bera p": lambda x: f"{x:.4g}",
-        "ARCH p": lambda x: f"{x:.3e}"
-    }
-))
+print(
+    tabla_diagnosticos.to_string(
+        index=False,
+        formatters={
+            "Ljung-Box p (8)": lambda x: f"{x:.4f}",
+            "Ljung-Box p (12)": lambda x: f"{x:.4f}",
+            "Jarque-Bera p": lambda x: f"{x:.4g}",
+            "ARCH p": lambda x: f"{x:.3e}",
+        },
+    )
+)
 
 # %% UNDÉCIMA PARTE. Diagnóstico gráfico del modelo candidato
 
 # Candidato provisional: ARIMA(1,1,0) sin deriva, elegido inicialmente por BIC.
 modelo_candidato = modelos_candidatos["ARIMA(1,1,0) sin deriva"]
 residuos_candidato = pd.Series(modelo_candidato.resid).dropna()
-residuos_candidato = residuos_candidato.iloc[modelo_candidato.loglikelihood_burn:]
+residuos_candidato = residuos_candidato.iloc[modelo_candidato.loglikelihood_burn :]
 
 fig, axes = plt.subplots(2, 2, figsize=(13, 9))
 
@@ -393,14 +407,14 @@ plt.plot(serie_oro.index, serie_oro, label="Precio observado")
 plt.plot(
     tabla_pronostico.index,
     tabla_pronostico["Pronóstico medio corregido"],
-    label="Pronóstico medio corregido"
+    label="Pronóstico medio corregido",
 )
 plt.fill_between(
     tabla_pronostico.index,
     tabla_pronostico["Límite inferior 95%"],
     tabla_pronostico["Límite superior 95%"],
     alpha=0.2,
-    label="Intervalo de predicción del 95%"
+    label="Intervalo de predicción del 95%",
 )
 plt.title("Pronóstico del precio real del oro: 10 trimestres")
 plt.xlabel("Fecha")
@@ -413,19 +427,23 @@ plt.show()
 # %% DECIMOTERCERA PARTE. Coeficientes y ecuación del modelo principal
 
 # 1. Mostrar coeficientes, errores estándar y valores p.
-tabla_coeficientes = pd.DataFrame({
-    "Coeficiente": modelo_final.params,
-    "Error estándar": modelo_final.bse,
-    "Valor p": modelo_final.pvalues
-})
-print("COEFICIENTES DEL ARIMA(1,1,0) SIN DERIVA")
-print(tabla_coeficientes.to_string(
-    formatters={
-        "Coeficiente": lambda x: f"{x:.5f}",
-        "Error estándar": lambda x: f"{x:.5f}",
-        "Valor p": lambda x: f"{x:.3e}"
+tabla_coeficientes = pd.DataFrame(
+    {
+        "Coeficiente": modelo_final.params,
+        "Error estándar": modelo_final.bse,
+        "Valor p": modelo_final.pvalues,
     }
-))
+)
+print("COEFICIENTES DEL ARIMA(1,1,0) SIN DERIVA")
+print(
+    tabla_coeficientes.to_string(
+        formatters={
+            "Coeficiente": lambda x: f"{x:.5f}",
+            "Error estándar": lambda x: f"{x:.5f}",
+            "Valor p": lambda x: f"{x:.3e}",
+        }
+    )
+)
 
 # 2. Presentar la ecuación estimada.
 parametros = dict(zip(modelo_final.param_names, modelo_final.params))
@@ -443,7 +461,7 @@ print("BIC:", round(modelo_final.bic, 4))
 print("Varianza estimada de las innovaciones:", round(varianza_error, 6))
 print("Desviación estándar estimada:", round(np.sqrt(varianza_error), 5))
 
-# %% DIECINUEVEAVA PARTE. Prueba de significancia del estimador
+# %% DECIMOCUARTA PARTE. Prueba de significancia del estimador
 
 # 1. Extraer el coeficiente AR(1) estimado
 phi = modelo_final.params["ar.L1"]
@@ -473,5 +491,6 @@ if valor_p < nivel_significancia:
     print("El coeficiente AR(1) es estadísticamente significativo.")
 else:
     print("\nDecisión: no se rechaza H0.")
-    print("No hay evidencia suficiente de que el coeficiente AR(1) sea distinto de cero.")
-
+    print(
+        "No hay evidencia suficiente de que el coeficiente AR(1) sea distinto de cero."
+    )
